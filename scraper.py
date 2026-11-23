@@ -192,7 +192,12 @@ def fetch_weekly_packs(
         if response.status_code == 404:
             return []
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    return parse_packs(response.text, only_packs=only_packs)
+
+
+def parse_packs(html: str, only_packs: bool = False) -> list[dict]:
+    """Extrai os artigos (packs) do HTML de uma página de tag."""
+    soup = BeautifulSoup(html, "html.parser")
     articles = soup.find_all("article")
     packs: list[dict] = []
     seen_urls: set[str] = set()
@@ -248,7 +253,12 @@ def extract_marvel_issues(pack_url: str, timeout: int = 20) -> list[dict]:
     with requests.Session() as session:
         response = _get_with_retry(session, pack_url, timeout=timeout)
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    return parse_pack_issues(response.text, pack_url)
+
+
+def parse_pack_issues(html: str, pack_url: str) -> list[dict]:
+    """Extrai as edições do HTML de um artigo de pack (ver extract_marvel_issues)."""
+    soup = BeautifulSoup(html, "html.parser")
     page_title_el = soup.find("h1", class_="post-title") or soup.find("h1")
     article_title = _clean_text(page_title_el.get_text()) if page_title_el else pack_url
 
@@ -337,7 +347,12 @@ def resolve_issue_download_links(
         if own_session:
             sess.close()
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    return parse_download_links(response.text, issue_url)
+
+
+def parse_download_links(html: str, issue_url: str) -> list[dict]:
+    """Extrai os links de descarga do HTML da página de uma edição, por ordem de preferência."""
+    soup = BeautifulSoup(html, "html.parser")
     container = (
         soup.select_one("div.post-contents")
         or soup.select_one("article .entry-content")
