@@ -17,7 +17,7 @@ from history import (
     STATUS_MISSING,
     History,
 )
-from library import adopt_existing_files, existing_file_for, plan_destination
+from library import adopt_existing_files, existing_file_for, plan_destination, prune_empty_dirs
 from scraper import (
     DEFAULT_TAG_PATH,
     extract_marvel_issues,
@@ -328,6 +328,8 @@ def main() -> None:
                             pack_title=selected_pack["title"], note=fallback_url,
                         )
                         console.print(f"[yellow]⚠ Requer download manual / host externo:[/yellow] {fallback_url}")
+
+            prune_empty_dirs(BASE_DOWNLOAD_DIR)  # downloads falhados podem deixar pastas de série vazias
 
             summary_lines = [
                 f"Concluídos automaticamente: [bold green]{succeeded}/{len(issues_to_download)}[/bold green]",

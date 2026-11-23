@@ -90,6 +90,20 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(self.history.status_of(issue["article_url"]), STATUS_DOWNLOADED)
         self.assertEqual(migrate_library(self.history, self.base, apply=False)[0][0], "ok")
 
+    def test_migrate_prunes_empty_dirs_but_keeps_folders_with_files(self):
+        (self.base / "2026.11.18 Weekly Pack").mkdir()
+        keep = self.base / "Outra" / "sub"
+        keep.mkdir(parents=True)
+        (keep / "x.cbz").write_bytes(b"x")
+
+        migrate_library(self.history, self.base, apply=False)
+        self.assertTrue((self.base / "2026.11.18 Weekly Pack").exists())
+
+        migrate_library(self.history, self.base, apply=True)
+        self.assertFalse((self.base / "2026.11.18 Weekly Pack").exists())
+        self.assertTrue((keep / "x.cbz").exists())
+        self.assertTrue(self.base.exists())
+
     def test_migrate_reports_conflict_instead_of_overwriting(self):
         old_dir = self.base / "Pack"
         old_dir.mkdir()

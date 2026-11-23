@@ -83,7 +83,6 @@ def migrate_library(history: History, base_dir: Path, apply: bool) -> list[tuple
     """
     results: list[tuple[str, str, str]] = []
     planned: set[str] = set()
-    old_dirs: set[Path] = set()
 
     for row in history.downloaded_rows():
         old = history.library_dir / row["rel_path"]
@@ -109,11 +108,21 @@ def migrate_library(history: History, base_dir: Path, apply: bool) -> list[tuple
             new.parent.mkdir(parents=True, exist_ok=True)
             old.replace(new)
             history.update_path(row["key"], new)
-            old_dirs.add(old.parent)
 
-    for folder in old_dirs:
+    if apply:
+        prune_empty_dirs(base_dir)
+    return results
+
+
+def prune_empty_dirs(base_dir: Path) -> list[Path]:
+    """Remove as subpastas vazias de base_dir (nunca a própria base_dir nem pastas com ficheiros)."""
+    removed: list[Path] = []
+    if not base_dir.is_dir():
+        return removed
+    for folder in sorted((p for p in base_dir.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
         try:
-            folder.rmdir()  # só remove pastas que ficaram vazias
+            folder.rmdir()  # falha se tiver conteúdo, incluindo .part de downloads em curso
+            removed.append(folder)
         except OSError:
             pass
-    return results
+    return removed
