@@ -79,6 +79,18 @@ def _looks_like_html(path: Path) -> bool:
     return head.startswith((b"<!doctype html", b"<html"))
 
 
+def _final_name(original_name: str, target_stem: str | None) -> str:
+    """Com target_stem, o nome é previsível e só a extensão vem do ficheiro descarregado."""
+    if not target_stem:
+        return sanitize_filename(original_name)
+    suffix = Path(original_name).suffix.lower()
+    return f"{target_stem}{suffix if suffix in COMIC_EXTENSIONS else '.cbz'}"
+
+
+def _pick_destination(target_dir: Path, filename: str, overwrite: bool) -> Path:
+    return target_dir / filename if overwrite else unique_filepath(target_dir, filename)
+
+
 def download_single_issue(
     title: str,
     url: str,
@@ -87,10 +99,15 @@ def download_single_issue(
     use_aria2c: bool = True,
     timeout: int = 30,
     max_retries: int = 3,
+    target_stem: str | None = None,
+    overwrite: bool = False,
 ) -> tuple[bool, str]:
     """
     Tenta descarregar uma edição a partir de um URL de descarga/redirecionamento.
     Devolve (sucesso: bool, mensagem_ou_url: str).
+
+    target_stem fixa o nome do ficheiro (sem extensão). overwrite substitui um ficheiro com o
+    mesmo nome em vez de criar "Nome (1).cbz".
     """
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -122,8 +139,10 @@ def download_single_issue(
                 if downloaded_file.stat().st_size == 0 or _looks_like_html(downloaded_file):
                     console.print(f"[yellow]aria2c devolveu uma página HTML para '{title}', a tentar via Python...[/yellow]")
                 else:
-                    destination = unique_filepath(target_dir, sanitize_filename(downloaded_file.name))
-                    shutil.move(str(downloaded_file), str(destination))
+                    destination = _pick_destination(
+                        target_dir, _final_name(downloaded_file.name, target_stem), overwrite
+                    )
+                    downloaded_file.replace(destination)
                     return True, str(destination)
         except (subprocess.CalledProcessError, OSError):
             console.print(f"[yellow]aria2c falhou para '{title}', a tentar via Python...[/yellow]")
@@ -153,8 +172,8 @@ def download_single_issue(
             if "text/html" in content_type:
                 return False, resp.url
 
-            filename = _extract_filename_from_response(resp, title)
-            destination = unique_filepath(target_dir, filename)
+            filename = _final_name(_extract_filename_from_response(resp, title), target_stem)
+            destination = _pick_destination(target_dir, filename, overwrite)
             total_bytes = int(resp.headers.get("content-length", 0))
 
             # O .part fica na pasta final (na NAS), para o rename no fim ser atómico e sem segunda cópia
@@ -189,7 +208,7 @@ def download_single_issue(
                 if _looks_like_html(temp_path):
                     return False, resp.url
 
-                if destination.exists():
+                if destination.exists() and not overwrite:
                     destination = unique_filepath(target_dir, filename)
                 temp_path.replace(destination)
                 return True, str(destination)

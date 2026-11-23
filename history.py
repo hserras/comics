@@ -149,6 +149,32 @@ class History:
                 ),
             )
 
+    def owner_of(self, file_path: Path) -> str | None:
+        """Chave da edição que tem este ficheiro registado, ou None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT key FROM issues WHERE rel_path = ?", (self._rel_path(Path(file_path)),)
+            ).fetchone()
+        return row["key"] if row else None
+
+    def downloaded_rows(self) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT key, title, pack_title, rel_path FROM issues WHERE status = ? AND rel_path IS NOT NULL",
+                (STATUS_DOWNLOADED,),
+            ).fetchall()
+
+    def update_path(self, key: str, new_file_path: Path) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE issues SET rel_path = ?, updated_at = ? WHERE key = ?",
+                (
+                    self._rel_path(Path(new_file_path)),
+                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    key,
+                ),
+            )
+
     def reconcile(self) -> dict[str, int]:
         """
         Compara o histórico com o disco: ficheiros descarregados que desapareceram passam a

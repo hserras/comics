@@ -9,7 +9,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from config import HISTORY_DB, LIBRARY_DIR, MARVEL_DIR_NAME, check_library_ready
-from downloader import download_single_issue, is_aria2c_available, sanitize_filename
+from downloader import download_single_issue, is_aria2c_available
 from history import (
     STATUS_DOWNLOADED,
     STATUS_FAILED,
@@ -17,6 +17,7 @@ from history import (
     STATUS_MISSING,
     History,
 )
+from library import adopt_existing_files, existing_file_for, plan_destination
 from scraper import (
     DEFAULT_TAG_PATH,
     extract_marvel_issues,
@@ -215,12 +216,15 @@ def main() -> None:
 
         while True:
             statuses = history.statuses(issue["article_url"] for issue in marvel_issues)
+            adopt_existing_files(history, BASE_DOWNLOAD_DIR, marvel_issues, statuses, selected_pack["title"])
 
             console.clear()
             show_marvel_table(selected_pack["title"], marvel_issues, statuses)
 
-            pack_folder = BASE_DOWNLOAD_DIR / sanitize_filename(selected_pack["title"])
-            console.print(f"\nPasta de destino: [bold cyan]{pack_folder}[/bold cyan]")
+            console.print(
+                f"\nPasta de destino: [bold cyan]{BASE_DOWNLOAD_DIR}[/bold cyan] "
+                "[dim](uma subpasta por série)[/dim]"
+            )
             show_issues_menu_options()
 
             raw_selection = Prompt.ask("\nEscolha", default="a")
@@ -291,12 +295,19 @@ def main() -> None:
                     fallback_url = candidates[0]["url"]
 
                     for cand in candidates:
+                        target_dir, target_stem = plan_destination(BASE_DOWNLOAD_DIR, issue["title"])
+                        # Em downloads forçados (t ou números) substitui o ficheiro desta edição em vez de duplicar
+                        overwrite = existing_file_for(
+                            history, BASE_DOWNLOAD_DIR, issue["title"], issue["article_url"]
+                        ) is not None
                         ok, result = download_single_issue(
                             title=issue["title"],
                             url=cand["url"],
-                            target_dir=pack_folder,
+                            target_dir=target_dir,
                             session=session,
                             use_aria2c=use_aria2c,
+                            target_stem=target_stem,
+                            overwrite=overwrite,
                         )
                         if ok:
                             succeeded += 1
@@ -320,7 +331,7 @@ def main() -> None:
 
             summary_lines = [
                 f"Concluídos automaticamente: [bold green]{succeeded}/{len(issues_to_download)}[/bold green]",
-                f"Pasta: [cyan]{pack_folder}[/cyan]",
+                f"Pasta: [cyan]{BASE_DOWNLOAD_DIR}[/cyan]",
             ]
             if skipped:
                 summary_lines.insert(1, f"Já descarregadas (saltadas): [bold]{skipped}[/bold]")
