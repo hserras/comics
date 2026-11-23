@@ -8,7 +8,15 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
+from config import HISTORY_DB, LIBRARY_DIR, MARVEL_DIR_NAME, check_library_ready
 from downloader import download_single_issue, is_aria2c_available, sanitize_filename
+from history import (
+    STATUS_DOWNLOADED,
+    STATUS_FAILED,
+    STATUS_MANUAL,
+    STATUS_MISSING,
+    History,
+)
 from scraper import (
     DEFAULT_TAG_PATH,
     extract_marvel_issues,
@@ -17,7 +25,14 @@ from scraper import (
 )
 
 console = Console()
-BASE_DOWNLOAD_DIR = Path("Downloads/Marvel")
+BASE_DOWNLOAD_DIR = LIBRARY_DIR / MARVEL_DIR_NAME
+
+STATUS_LABELS = {
+    STATUS_DOWNLOADED: "[green]✓ descarregada[/green]",
+    STATUS_FAILED: "[red]✗ falhou[/red]",
+    STATUS_MANUAL: "[yellow]manual[/yellow]",
+    STATUS_MISSING: "[yellow]✗ ficheiro em falta[/yellow]",
+}
 
 
 def show_packs_table(packs: list[dict], page: int, tag_path: str) -> None:
@@ -46,7 +61,7 @@ def show_packs_menu_options() -> None:
     console.print("  • [bold]q[/bold] — Sair")
 
 
-def show_marvel_table(pack_title: str, issues: list[dict]) -> None:
+def show_marvel_table(pack_title: str, issues: list[dict], statuses: dict[str, str]) -> None:
     table = Table(
         title=f"[bold yellow]Marvel em: {pack_title}[/bold yellow]",
         header_style="bold cyan",
@@ -54,16 +69,21 @@ def show_marvel_table(pack_title: str, issues: list[dict]) -> None:
     )
     table.add_column("Nº", style="dim", width=4, justify="center")
     table.add_column("Edição / Item", style="white")
+    table.add_column("Estado")
 
     for idx, issue in enumerate(issues, 1):
-        table.add_row(str(idx), issue["title"])
+        status = statuses.get(issue["article_url"])
+        table.add_row(str(idx), issue["title"], STATUS_LABELS.get(status, "-"))
 
+    done = sum(1 for s in statuses.values() if s == STATUS_DOWNLOADED)
     console.print(table)
+    console.print(f"Descarregadas: [bold]{done}/{len(issues)}[/bold]")
 
 
 def show_issues_menu_options() -> None:
     console.print("\n[bold cyan]Opções de download:[/bold cyan]")
-    console.print("  • [bold]a[/bold] — Descarregar todas as edições listadas")
+    console.print("  • [bold]a[/bold] — Descarregar as edições que faltam (salta as já descarregadas)")
+    console.print("  • [bold]t[/bold] — Descarregar todas, incluindo as já descarregadas")
     console.print("  • [bold]<nºs / intervalos>[/bold] — Descarregar apenas os escolhidos (ex.: [bold]1, 4, 7-9[/bold])")
     console.print("  • [bold]v[/bold] — Voltar à lista de artigos / packs")
 
@@ -78,7 +98,9 @@ def parse_page_jump(raw_choice: str) -> int | None:
 
 def parse_issue_selection(raw_choice: str, total: int) -> list[int] | str | None:
     choice = raw_choice.strip().lower()
-    if choice in {"a", "all", ""}:
+    if choice in {"a", "pending", ""}:
+        return "pending"
+    if choice in {"t", "todas", "all"}:
         return "all"
     if choice in {"v", "voltar", "b", "back", "q"}:
         return "back"
@@ -113,6 +135,15 @@ def main() -> None:
     last_valid_page = 1
     tag_path = DEFAULT_TAG_PATH
     use_aria2c = is_aria2c_available()
+
+    history = History(HISTORY_DB, LIBRARY_DIR)
+    reconciled = history.reconcile()
+    if reconciled["missing"]:
+        console.print(
+            f"[yellow]{reconciled['missing']} edição(ões) do histórico já não existem no disco "
+            "e voltam a aparecer como por descarregar.[/yellow]"
+        )
+        Prompt.ask("Prime Enter para continuar")
 
     while True:
         while True:
@@ -183,8 +214,10 @@ def main() -> None:
             continue
 
         while True:
+            statuses = history.statuses(issue["article_url"] for issue in marvel_issues)
+
             console.clear()
-            show_marvel_table(selected_pack["title"], marvel_issues)
+            show_marvel_table(selected_pack["title"], marvel_issues, statuses)
 
             pack_folder = BASE_DOWNLOAD_DIR / sanitize_filename(selected_pack["title"])
             console.print(f"\nPasta de destino: [bold cyan]{pack_folder}[/bold cyan]")
@@ -201,10 +234,28 @@ def main() -> None:
             if parsed == "back":
                 break
 
-            issues_to_download = (
-                marvel_issues if parsed == "all" else [marvel_issues[i] for i in parsed]
-            )
+            if parsed == "all":
+                issues_to_download = marvel_issues
+            elif parsed == "pending":
+                issues_to_download = [
+                    issue for issue in marvel_issues
+                    if statuses.get(issue["article_url"]) != STATUS_DOWNLOADED
+                ]
+            else:
+                issues_to_download = [marvel_issues[i] for i in parsed]
 
+            if not issues_to_download:
+                console.print("[green]Todas as edições deste pack já estão descarregadas.[/green]")
+                Prompt.ask("Prime Enter para continuar")
+                continue
+
+            library_ok, library_error = check_library_ready()
+            if not library_ok:
+                console.print(f"[bold red]{library_error}[/bold red]")
+                Prompt.ask("Prime Enter para continuar")
+                continue
+
+            skipped = len(marvel_issues) - len(issues_to_download) if parsed == "pending" else 0
             succeeded = 0
             manual_links: list[tuple[str, str]] = []
 
@@ -220,11 +271,19 @@ def main() -> None:
                         )
                     except Exception as exc:
                         manual_links.append((issue["title"], f"{issue['article_url']} ({exc})"))
+                        history.record(
+                            issue["article_url"], issue["title"], STATUS_FAILED,
+                            pack_title=selected_pack["title"], note=str(exc),
+                        )
                         console.print(f"[yellow]⚠ Falha ao ler página da edição:[/yellow] {exc}")
                         continue
 
                     if not candidates:
                         manual_links.append((issue["title"], issue["article_url"]))
+                        history.record(
+                            issue["article_url"], issue["title"], STATUS_MANUAL,
+                            pack_title=selected_pack["title"], note=issue["article_url"],
+                        )
                         console.print(f"[yellow]⚠ Sem links detetados, abrir artigo:[/yellow] {issue['article_url']}")
                         continue
 
@@ -242,6 +301,10 @@ def main() -> None:
                         if ok:
                             succeeded += 1
                             downloaded_this_issue = True
+                            history.record(
+                                issue["article_url"], issue["title"], STATUS_DOWNLOADED,
+                                pack_title=selected_pack["title"], file_path=Path(result),
+                            )
                             console.print(f"[green]✓ Guardado ({cand['label']}):[/green] {result}")
                             break
                         else:
@@ -249,12 +312,18 @@ def main() -> None:
 
                     if not downloaded_this_issue:
                         manual_links.append((issue["title"], fallback_url))
+                        history.record(
+                            issue["article_url"], issue["title"], STATUS_MANUAL,
+                            pack_title=selected_pack["title"], note=fallback_url,
+                        )
                         console.print(f"[yellow]⚠ Requer download manual / host externo:[/yellow] {fallback_url}")
 
             summary_lines = [
                 f"Concluídos automaticamente: [bold green]{succeeded}/{len(issues_to_download)}[/bold green]",
                 f"Pasta: [cyan]{pack_folder}[/cyan]",
             ]
+            if skipped:
+                summary_lines.insert(1, f"Já descarregadas (saltadas): [bold]{skipped}[/bold]")
             if manual_links:
                 summary_lines.append("\n[yellow]Links que exigem abertura no browser:[/yellow]")
                 for title, link in manual_links:

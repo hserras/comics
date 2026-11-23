@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -156,8 +157,8 @@ def download_single_issue(
             destination = unique_filepath(target_dir, filename)
             total_bytes = int(resp.headers.get("content-length", 0))
 
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                temp_path = Path(tmp.name)
+            # O .part fica na pasta final (na NAS), para o rename no fim ser atómico e sem segunda cópia
+            temp_path = destination.with_name(f".{destination.name}.{uuid.uuid4().hex[:8]}.part")
 
             try:
                 progress = Progress(
@@ -171,22 +172,29 @@ def download_single_issue(
                     TimeRemainingColumn(compact=True),
                     transient=True,
                 )
+                written = 0
                 with progress, open(temp_path, "wb") as f:
                     task = progress.add_task(description=destination.name, total=total_bytes or None)
                     for chunk in resp.iter_content(chunk_size=1024 * 64):
                         if chunk:
                             f.write(chunk)
+                            written += len(chunk)
                             progress.update(task, advance=len(chunk))
+
+                # Com Content-Encoding o content-length refere-se ao tamanho comprimido
+                if total_bytes and not resp.headers.get("content-encoding") and written != total_bytes:
+                    return False, f"{url} (download incompleto: {written} de {total_bytes} bytes)"
 
                 # Proteção extra: verifica se o ficheiro começa por HTML
                 if _looks_like_html(temp_path):
                     return False, resp.url
 
-                shutil.move(str(temp_path), str(destination))
+                if destination.exists():
+                    destination = unique_filepath(target_dir, filename)
+                temp_path.replace(destination)
                 return True, str(destination)
             finally:
-                if temp_path.exists():
-                    temp_path.unlink(missing_ok=True)
+                temp_path.unlink(missing_ok=True)
 
     except Exception as exc:
         return False, f"{url} ({exc})"
