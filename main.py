@@ -8,6 +8,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
+from comicinfo import build_comicinfo
 from config import HISTORY_DB, LIBRARY_DIR, MARVEL_DIR_NAME, check_library_ready
 from downloader import download_single_issue, is_aria2c_available
 from history import (
@@ -308,6 +309,7 @@ def main() -> None:
                             use_aria2c=use_aria2c,
                             target_stem=target_stem,
                             overwrite=overwrite,
+                            comicinfo=build_comicinfo(issue["title"], issue["article_url"]),
                         )
                         if ok:
                             succeeded += 1

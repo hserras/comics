@@ -1,6 +1,7 @@
 """Destinos na biblioteca: onde cada edição fica, e deteção de ficheiros que já existem."""
 from pathlib import Path
 
+from comicinfo import build_comicinfo, can_tag, tag_existing
 from downloader import COMIC_EXTENSIONS
 from history import STATUS_DOWNLOADED, History, issue_key
 from titles import plan_names
@@ -126,3 +127,28 @@ def prune_empty_dirs(base_dir: Path) -> list[Path]:
         except OSError:
             pass
     return removed
+
+
+def tag_library(history: History, apply: bool) -> list[tuple[str, str]]:
+    """
+    Acrescenta ComicInfo.xml aos .cbz já descarregados que ainda não o têm. Sem apply, só simula.
+    Devolve [(resultado, caminho)], com resultado em 'tag' (a etiquetar/etiquetado), 'skip' (não é
+    .cbz/zip, já tem metadados ou o título não é reconhecido) ou 'missing'.
+    """
+    results: list[tuple[str, str]] = []
+    for row in history.downloaded_rows():
+        path = history.library_dir / row["rel_path"]
+        if not path.is_file():
+            results.append(("missing", row["rel_path"]))
+            continue
+
+        xml = build_comicinfo(row["title"], row["article_url"])
+        if xml is None or path.suffix.lower() != ".cbz" or not can_tag(path):
+            results.append(("skip", row["rel_path"]))
+            continue
+
+        if apply:
+            tag_existing(path, xml)
+        results.append(("tag", row["rel_path"]))
+    return results
+

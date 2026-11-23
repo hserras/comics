@@ -160,7 +160,7 @@ class History:
     def downloaded_rows(self) -> list[sqlite3.Row]:
         with self._connect() as conn:
             return conn.execute(
-                "SELECT key, title, pack_title, rel_path FROM issues WHERE status = ? AND rel_path IS NOT NULL",
+                "SELECT key, article_url, title, pack_title, rel_path FROM issues WHERE status = ? AND rel_path IS NOT NULL",
                 (STATUS_DOWNLOADED,),
             ).fetchall()
 

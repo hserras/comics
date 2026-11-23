@@ -18,6 +18,8 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
+from comicinfo import add_comicinfo
+
 console = Console()
 
 HEADERS = {
@@ -91,6 +93,12 @@ def _pick_destination(target_dir: Path, filename: str, overwrite: bool) -> Path:
     return target_dir / filename if overwrite else unique_filepath(target_dir, filename)
 
 
+def _embed_comicinfo(temp_file: Path, destination: Path, comicinfo: str | None) -> None:
+    """Grava os metadados no ficheiro temporário, antes do rename final. Só para .cbz."""
+    if comicinfo and destination.suffix.lower() == ".cbz":
+        add_comicinfo(temp_file, comicinfo)
+
+
 def download_single_issue(
     title: str,
     url: str,
@@ -101,13 +109,14 @@ def download_single_issue(
     max_retries: int = 3,
     target_stem: str | None = None,
     overwrite: bool = False,
+    comicinfo: str | None = None,
 ) -> tuple[bool, str]:
     """
     Tenta descarregar uma edição a partir de um URL de descarga/redirecionamento.
     Devolve (sucesso: bool, mensagem_ou_url: str).
 
     target_stem fixa o nome do ficheiro (sem extensão). overwrite substitui um ficheiro com o
-    mesmo nome em vez de criar "Nome (1).cbz".
+    mesmo nome em vez de criar "Nome (1).cbz". comicinfo é o XML a gravar dentro dos .cbz.
     """
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -142,6 +151,7 @@ def download_single_issue(
                     destination = _pick_destination(
                         target_dir, _final_name(downloaded_file.name, target_stem), overwrite
                     )
+                    _embed_comicinfo(downloaded_file, destination, comicinfo)
                     downloaded_file.replace(destination)
                     return True, str(destination)
         except (subprocess.CalledProcessError, OSError):
@@ -210,6 +220,7 @@ def download_single_issue(
 
                 if destination.exists() and not overwrite:
                     destination = unique_filepath(target_dir, filename)
+                _embed_comicinfo(temp_path, destination, comicinfo)
                 temp_path.replace(destination)
                 return True, str(destination)
             finally:
