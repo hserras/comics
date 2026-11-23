@@ -38,6 +38,7 @@ DIRECT_HOST_HINTS = (
 )
 
 GETCOMICS_DOMAINS = ("getcomics.org", "getcomics.info")
+SHORTENER_DOMAINS = ("sh.st",)
 
 MIRROR_DOMAINS = {
     "PIXELDRAIN": ("pixeldrain.com",),
@@ -69,6 +70,59 @@ def _mirror_from_text(text_upper: str) -> str | None:
         if re.search(rf"\b{mirror}\b", text_upper):
             return mirror
     return None
+
+
+def _is_section_header(el) -> bool:
+    """Cabeçalho de secção ('IMAGE COMICS:', '2000 AD'...): título curto, sem links, seguido de uma lista."""
+    if el.name not in ("h1", "h2", "h3", "h4", "p") or el.find("a"):
+        return False
+    text = _clean_text(el.get_text())
+    next_el = el.find_next_sibling()
+    return bool(text) and len(text) <= 40 and next_el is not None and next_el.name in ("ul", "ol")
+
+
+def _is_shortener(url: str) -> bool:
+    return _host_matches((urlparse(url).hostname or "").lower(), SHORTENER_DOMAINS)
+
+
+def _is_issue_article_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return (
+        parsed.scheme in ("http", "https")
+        and _host_matches((parsed.hostname or "").lower(), GETCOMICS_DOMAINS)
+        and parsed.path.strip("/").startswith("marvel/")
+    )
+
+
+def _extract_listed_issues(container, pack_url: str) -> list[dict]:
+    """
+    Packs antigos não têm secção 'MARVEL COMICS': o artigo inteiro é Marvel e cada edição
+    é um <li> com um link para a página da edição (/marvel/...) no GetComics, ou para um
+    encurtador (sh.st), que só se abre manualmente no browser. O texto do link é o título
+    ('Black Panther #09') ou, no formato 'Título : Download | Read Online', o texto antes do ':'.
+    """
+    issues: list[dict] = []
+    seen_urls: set[str] = set()
+
+    for li in container.find_all("li"):
+        for a_tag in li.find_all("a", href=True):
+            full_url = urljoin(pack_url, a_tag["href"].strip())
+            if not (_is_issue_article_url(full_url) or _is_shortener(full_url)):
+                continue
+
+            label = _clean_text(a_tag.get_text())
+            if label.lower() == "download":
+                title = _clean_text(li.get_text()).split(":", 1)[0].strip()
+                title = re.sub(r"\s*[-–—]\s*$", "", title).strip()
+            else:
+                title = label
+
+            if title and full_url not in seen_urls:
+                seen_urls.add(full_url)
+                issues.append({"title": title, "article_url": full_url})
+            break
+
+    return issues
 
 
 def _build_tag_page_url(page: int, tag_path: str = DEFAULT_TAG_PATH) -> str:
@@ -187,7 +241,8 @@ def fetch_weekly_packs(
 def extract_marvel_issues(pack_url: str, timeout: int = 20) -> list[dict]:
     """
     Abre um artigo (Weekly Pack / Marvel Week / etc.) e extrai os itens sob MARVEL COMICS.
-    Se o artigo não tiver cabeçalho 'MARVEL COMICS' explícito (por ser um artigo de edição única),
+    Sem esse cabeçalho, tenta o formato antigo (lista <li><a> do artigo inteiro, ver
+    _extract_listed_issues). Se também não houver lista (artigo de edição única),
     devolve uma entrada única com o próprio título e URL do artigo.
     """
     with requests.Session() as session:
@@ -205,20 +260,25 @@ def extract_marvel_issues(pack_url: str, timeout: int = 20) -> list[dict]:
     )
 
     in_marvel = False
+    found_marvel_header = False
     issues: list[dict] = []
     seen_urls: set[str] = set()
 
     for el in container.find_all(["h1", "h2", "h3", "h4", "p", "li", "div"]):
         if el.name == "div" and el.find(["p", "li", "h2", "h3", "h4"]):
             continue
+        # HTML malformado (<p> dentro de <p>): o título tem de vir do <li>, não do <p> exterior
+        if el.name == "p" and el.find(["p", "ul", "ol", "li", "div"]):
+            continue
 
         normalized = _clean_text(el.get_text()).upper().rstrip(":")
 
         if normalized == "MARVEL COMICS" and len(normalized) <= 30:
             in_marvel = True
+            found_marvel_header = True
             continue
 
-        if in_marvel and normalized in SECTION_HEADERS:
+        if in_marvel and (normalized in SECTION_HEADERS or _is_section_header(el)):
             break
 
         if not in_marvel:
@@ -244,6 +304,9 @@ def extract_marvel_issues(pack_url: str, timeout: int = 20) -> list[dict]:
                     "article_url": full_url,
                 })
 
+    if not issues and not found_marvel_header:
+        issues = _extract_listed_issues(container, pack_url)
+
     if not issues:
         return [{"title": article_title, "article_url": pack_url}]
 
@@ -258,7 +321,11 @@ def resolve_issue_download_links(
 ) -> list[dict]:
     """
     Abre a página individual de uma edição e extrai os links de descarga reais.
+    Encurtadores (sh.st) não são resolúveis: devolve [] sem fazer pedidos.
     """
+    if _is_shortener(issue_url):
+        return []
+
     if delay_range[1] > 0:
         time.sleep(random.uniform(*delay_range))
 
