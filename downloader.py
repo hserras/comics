@@ -1,3 +1,4 @@
+import contextlib
 import random
 import re
 import shutil
@@ -6,6 +7,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from typing import Callable
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -110,6 +112,8 @@ def download_single_issue(
     target_stem: str | None = None,
     overwrite: bool = False,
     comicinfo: str | None = None,
+    on_progress: Callable[[int, int | None], None] | None = None,
+    log: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
     """
     Tenta descarregar uma edição a partir de um URL de descarga/redirecionamento.
@@ -117,7 +121,13 @@ def download_single_issue(
 
     target_stem fixa o nome do ficheiro (sem extensão). overwrite substitui um ficheiro com o
     mesmo nome em vez de criar "Nome (1).cbz". comicinfo é o XML a gravar dentro dos .cbz.
+    on_progress(bytes_escritos, total) substitui a barra de progresso do terminal; log recebe os
+    avisos (por omissão são escritos na consola).
     """
+    if log is None:
+        def log(message: str) -> None:
+            console.print(f"[yellow]{message}[/yellow]")
+
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if use_aria2c and is_aria2c_available():
@@ -142,11 +152,11 @@ def download_single_issue(
                 if p.is_file() and p.suffix.lower() != ".aria2"
             ]
             if not downloaded:
-                console.print(f"[yellow]aria2c não gerou ficheiro para '{title}', a tentar via Python...[/yellow]")
+                log(f"aria2c não gerou ficheiro para '{title}', a tentar via Python...")
             else:
                 downloaded_file = max(downloaded, key=lambda p: p.stat().st_size)
                 if downloaded_file.stat().st_size == 0 or _looks_like_html(downloaded_file):
-                    console.print(f"[yellow]aria2c devolveu uma página HTML para '{title}', a tentar via Python...[/yellow]")
+                    log(f"aria2c devolveu uma página HTML para '{title}', a tentar via Python...")
                 else:
                     destination = _pick_destination(
                         target_dir, _final_name(downloaded_file.name, target_stem), overwrite
@@ -155,7 +165,7 @@ def download_single_issue(
                     downloaded_file.replace(destination)
                     return True, str(destination)
         except (subprocess.CalledProcessError, OSError):
-            console.print(f"[yellow]aria2c falhou para '{title}', a tentar via Python...[/yellow]")
+            log(f"aria2c falhou para '{title}', a tentar via Python...")
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -190,25 +200,32 @@ def download_single_issue(
             temp_path = destination.with_name(f".{destination.name}.{uuid.uuid4().hex[:8]}.part")
 
             try:
-                progress = Progress(
-                    BarColumn(bar_width=None),
-                    "[progress.percentage]{task.percentage:>3.1f}%",
-                    "•",
-                    DownloadColumn(binary_units=True),
-                    "•",
-                    TransferSpeedColumn(),
-                    "•",
-                    TimeRemainingColumn(compact=True),
-                    transient=True,
-                )
+                progress = contextlib.nullcontext()
+                if on_progress is None:
+                    progress = Progress(
+                        BarColumn(bar_width=None),
+                        "[progress.percentage]{task.percentage:>3.1f}%",
+                        "•",
+                        DownloadColumn(binary_units=True),
+                        "•",
+                        TransferSpeedColumn(),
+                        "•",
+                        TimeRemainingColumn(compact=True),
+                        transient=True,
+                    )
                 written = 0
                 with progress, open(temp_path, "wb") as f:
-                    task = progress.add_task(description=destination.name, total=total_bytes or None)
+                    task = None
+                    if on_progress is None:
+                        task = progress.add_task(description=destination.name, total=total_bytes or None)
                     for chunk in resp.iter_content(chunk_size=1024 * 64):
                         if chunk:
                             f.write(chunk)
                             written += len(chunk)
-                            progress.update(task, advance=len(chunk))
+                            if task is not None:
+                                progress.update(task, advance=len(chunk))
+                            else:
+                                on_progress(written, total_bytes or None)
 
                 # Com Content-Encoding o content-length refere-se ao tamanho comprimido
                 if total_bytes and not resp.headers.get("content-encoding") and written != total_bytes:

@@ -1,33 +1,28 @@
 #!/usr/bin/env python3
 import re
-from pathlib import Path
 
-import requests
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 from rich.prompt import Prompt
 from rich.table import Table
 
-from comicinfo import build_comicinfo
-from config import HISTORY_DB, LIBRARY_DIR, MARVEL_DIR_NAME, check_library_ready
-from downloader import download_single_issue, is_aria2c_available
 from history import (
     STATUS_DOWNLOADED,
     STATUS_FAILED,
     STATUS_MANUAL,
     STATUS_MISSING,
-    History,
 )
-from library import adopt_existing_files, existing_file_for, plan_destination, prune_empty_dirs
-from scraper import (
-    DEFAULT_TAG_PATH,
-    extract_marvel_issues,
-    fetch_weekly_packs,
-    resolve_issue_download_links,
-)
+from scraper import DEFAULT_TAG_PATH
+from service import ComicService, DownloadEvent
 
 console = Console()
-BASE_DOWNLOAD_DIR = LIBRARY_DIR / MARVEL_DIR_NAME
 
 STATUS_LABELS = {
     STATUS_DOWNLOADED: "[green]✓ descarregada[/green]",
@@ -132,14 +127,62 @@ def parse_issue_selection(raw_choice: str, total: int) -> list[int] | str | None
     return sorted(selected_indices)
 
 
+class DownloadView:
+    """Mostra no terminal os eventos de um download: linhas de estado e a barra de progresso."""
+
+    def __init__(self) -> None:
+        self._progress: Progress | None = None
+        self._task = None
+
+    def _stop_bar(self) -> None:
+        if self._progress is not None:
+            self._progress.stop()
+            self._progress = None
+            self._task = None
+
+    def __call__(self, event: DownloadEvent) -> None:
+        issue = event.issue
+        if event.kind == "progress":
+            if self._progress is None:
+                self._progress = Progress(
+                    BarColumn(bar_width=None),
+                    "[progress.percentage]{task.percentage:>3.1f}%",
+                    "•",
+                    DownloadColumn(binary_units=True),
+                    "•",
+                    TransferSpeedColumn(),
+                    "•",
+                    TimeRemainingColumn(compact=True),
+                    transient=True,
+                    console=console,
+                )
+                self._task = self._progress.add_task(issue["title"], total=event.bytes_total)
+                self._progress.start()
+            self._progress.update(self._task, completed=event.bytes_done, total=event.bytes_total)
+            return
+
+        self._stop_bar()
+        if event.kind == "started":
+            console.print(f"\n[bold][{event.index}/{event.total}][/bold] {issue['title']}")
+        elif event.kind == "warning":
+            console.print(f"[yellow]{event.detail}[/yellow]")
+        elif event.kind == "read_failed":
+            console.print(f"[yellow]⚠ Falha ao ler página da edição:[/yellow] {event.detail}")
+        elif event.kind == "no_links":
+            console.print(f"[yellow]⚠ Sem links detetados, abrir artigo:[/yellow] {event.detail}")
+        elif event.kind == "saved":
+            console.print(f"[green]✓ Guardado ({event.label}):[/green] {event.detail}")
+        elif event.kind == "manual":
+            console.print(f"[yellow]⚠ Requer download manual / host externo:[/yellow] {event.detail}")
+
+
 def main() -> None:
     page = 1
     last_valid_page = 1
     tag_path = DEFAULT_TAG_PATH
-    use_aria2c = is_aria2c_available()
 
-    history = History(HISTORY_DB, LIBRARY_DIR)
-    reconciled = history.reconcile()
+    service = ComicService()
+    reconciled = service.reconcile()
     if reconciled["missing"]:
         console.print(
             f"[yellow]{reconciled['missing']} edição(ões) do histórico já não existem no disco "
@@ -153,7 +196,7 @@ def main() -> None:
             error = None
             with console.status(f"[bold green]A carregar {tag_path} (página {page})...[/bold green]"):
                 try:
-                    packs = fetch_weekly_packs(page=page, tag_path=tag_path)
+                    packs = service.list_packs(page, tag_path)
                 except Exception as exc:
                     error = exc
 
@@ -206,7 +249,7 @@ def main() -> None:
         error = None
         with console.status(f"[bold green]A extrair conteúdos de '{selected_pack['title']}'...[/bold green]"):
             try:
-                marvel_issues = extract_marvel_issues(selected_pack["url"])
+                marvel_issues = service.load_pack(selected_pack)
             except Exception as exc:
                 error = exc
 
@@ -216,14 +259,13 @@ def main() -> None:
             continue
 
         while True:
-            statuses = history.statuses(issue["article_url"] for issue in marvel_issues)
-            adopt_existing_files(history, BASE_DOWNLOAD_DIR, marvel_issues, statuses, selected_pack["title"])
+            statuses = service.issue_statuses(selected_pack["title"], marvel_issues)
 
             console.clear()
             show_marvel_table(selected_pack["title"], marvel_issues, statuses)
 
             console.print(
-                f"\nPasta de destino: [bold cyan]{BASE_DOWNLOAD_DIR}[/bold cyan] "
+                f"\nPasta de destino: [bold cyan]{service.base_dir}[/bold cyan] "
                 "[dim](uma subpasta por série)[/dim]"
             )
             show_issues_menu_options()
@@ -239,109 +281,31 @@ def main() -> None:
             if parsed == "back":
                 break
 
-            if parsed == "all":
-                issues_to_download = marvel_issues
-            elif parsed == "pending":
-                issues_to_download = [
-                    issue for issue in marvel_issues
-                    if statuses.get(issue["article_url"]) != STATUS_DOWNLOADED
-                ]
-            else:
-                issues_to_download = [marvel_issues[i] for i in parsed]
+            issues_to_download = service.select_issues(marvel_issues, statuses, parsed)
 
             if not issues_to_download:
                 console.print("[green]Todas as edições deste pack já estão descarregadas.[/green]")
                 Prompt.ask("Prime Enter para continuar")
                 continue
 
-            library_ok, library_error = check_library_ready()
+            library_ok, library_error = service.check_library_ready()
             if not library_ok:
                 console.print(f"[bold red]{library_error}[/bold red]")
                 Prompt.ask("Prime Enter para continuar")
                 continue
 
             skipped = len(marvel_issues) - len(issues_to_download) if parsed == "pending" else 0
-            succeeded = 0
-            manual_links: list[tuple[str, str]] = []
-
-            with requests.Session() as session:
-                for idx, issue in enumerate(issues_to_download, 1):
-                    console.print(f"\n[bold][{idx}/{len(issues_to_download)}][/bold] {issue['title']}")
-
-                    try:
-                        candidates = resolve_issue_download_links(
-                            issue["article_url"],
-                            session=session,
-                            delay_range=(1.8, 3.5),
-                        )
-                    except Exception as exc:
-                        manual_links.append((issue["title"], f"{issue['article_url']} ({exc})"))
-                        history.record(
-                            issue["article_url"], issue["title"], STATUS_FAILED,
-                            pack_title=selected_pack["title"], note=str(exc),
-                        )
-                        console.print(f"[yellow]⚠ Falha ao ler página da edição:[/yellow] {exc}")
-                        continue
-
-                    if not candidates:
-                        manual_links.append((issue["title"], issue["article_url"]))
-                        history.record(
-                            issue["article_url"], issue["title"], STATUS_MANUAL,
-                            pack_title=selected_pack["title"], note=issue["article_url"],
-                        )
-                        console.print(f"[yellow]⚠ Sem links detetados, abrir artigo:[/yellow] {issue['article_url']}")
-                        continue
-
-                    downloaded_this_issue = False
-                    fallback_url = candidates[0]["url"]
-
-                    for cand in candidates:
-                        target_dir, target_stem = plan_destination(BASE_DOWNLOAD_DIR, issue["title"])
-                        # Em downloads forçados (t ou números) substitui o ficheiro desta edição em vez de duplicar
-                        overwrite = existing_file_for(
-                            history, BASE_DOWNLOAD_DIR, issue["title"], issue["article_url"]
-                        ) is not None
-                        ok, result = download_single_issue(
-                            title=issue["title"],
-                            url=cand["url"],
-                            target_dir=target_dir,
-                            session=session,
-                            use_aria2c=use_aria2c,
-                            target_stem=target_stem,
-                            overwrite=overwrite,
-                            comicinfo=build_comicinfo(issue["title"], issue["article_url"]),
-                        )
-                        if ok:
-                            succeeded += 1
-                            downloaded_this_issue = True
-                            history.record(
-                                issue["article_url"], issue["title"], STATUS_DOWNLOADED,
-                                pack_title=selected_pack["title"], file_path=Path(result),
-                            )
-                            console.print(f"[green]✓ Guardado ({cand['label']}):[/green] {result}")
-                            break
-                        else:
-                            fallback_url = result
-
-                    if not downloaded_this_issue:
-                        manual_links.append((issue["title"], fallback_url))
-                        history.record(
-                            issue["article_url"], issue["title"], STATUS_MANUAL,
-                            pack_title=selected_pack["title"], note=fallback_url,
-                        )
-                        console.print(f"[yellow]⚠ Requer download manual / host externo:[/yellow] {fallback_url}")
-
-            prune_empty_dirs(BASE_DOWNLOAD_DIR)  # downloads falhados podem deixar pastas de série vazias
+            result = service.download(selected_pack["title"], issues_to_download, DownloadView())
 
             summary_lines = [
-                f"Concluídos automaticamente: [bold green]{succeeded}/{len(issues_to_download)}[/bold green]",
-                f"Pasta: [cyan]{BASE_DOWNLOAD_DIR}[/cyan]",
+                f"Concluídos automaticamente: [bold green]{result.succeeded}/{result.total}[/bold green]",
+                f"Pasta: [cyan]{service.base_dir}[/cyan]",
             ]
             if skipped:
                 summary_lines.insert(1, f"Já descarregadas (saltadas): [bold]{skipped}[/bold]")
-            if manual_links:
+            if result.manual_links:
                 summary_lines.append("\n[yellow]Links que exigem abertura no browser:[/yellow]")
-                for title, link in manual_links:
+                for title, link in result.manual_links:
                     summary_lines.append(f"  • {title}: {link}")
 
             console.print(Panel("\n".join(summary_lines), title="Resumo do Download", border_style="green"))
