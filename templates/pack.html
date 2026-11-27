@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('index') }}">← Packs</a></p>
+<h1>{{ title }}</h1>
+<p class="dim">Descarregadas: <strong>{{ done }}/{{ rows|length }}</strong> · Destino: {{ base_dir }} (uma subpasta por série)</p>
+
+<form method="post" action="{{ url_for('enqueue') }}">
+  <input type="hidden" name="url" value="{{ url }}">
+  <input type="hidden" name="title" value="{{ title }}">
+  <div class="actions">
+    <button name="mode" value="pending">Descarregar as que faltam</button>
+    <button name="mode" value="all">Descarregar todas</button>
+    <button name="mode" value="selected">Descarregar selecionadas</button>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th><input type="checkbox" aria-label="Selecionar todas"
+                   onclick="document.querySelectorAll('input[name=i]').forEach(c => c.checked = this.checked)"></th>
+        <th>Nº</th><th>Edição / Item</th><th>Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><input type="checkbox" name="i" value="{{ r.n }}"></td>
+        <td class="dim">{{ r.n + 1 }}</td>
+        <td>{{ r.title }}</td>
+        <td class="{{ r.css }}">{{ r.status }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</form>
+{% endblock %}

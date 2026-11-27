@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Packs — página {{ page }}</h1>
+
+{% if error %}<p class="flash bad">{{ error }}</p>{% endif %}
+
+{% if packs %}
+<table>
+  <thead><tr><th>Artigo / Pack</th><th>Info</th></tr></thead>
+  <tbody>
+  {% for p in packs %}
+    <tr>
+      <td><a href="{{ url_for('pack', url=p.url, title=p.title) }}">{{ p.title }}</a></td>
+      <td class="dim">{{ p.meta or '-' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<nav class="pager">
+  {% if page > 1 %}<a href="{{ url_for('index', page=page - 1) }}">← Anterior</a>{% endif %}
+  <a href="{{ url_for('index', page=page + 1) }}">Seguinte →</a>
+  <form method="get" class="inline">
+    <input type="number" name="page" min="1" value="{{ page }}" aria-label="Página">
+    <button>Ir</button>
+  </form>
+</nav>
+{% endblock %}

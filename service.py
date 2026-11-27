@@ -39,6 +39,7 @@ class DownloadResult:
     succeeded: int
     total: int
     manual_links: list[tuple[str, str]] = field(default_factory=list)
+    cancelled: bool = False
 
 
 EventCallback = Callable[[DownloadEvent], None]
@@ -95,13 +96,18 @@ class ComicService:
         pack_title: str,
         issues: list[dict],
         on_event: EventCallback | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> DownloadResult:
+        """should_stop é verificado entre edições: a edição em curso termina sempre."""
         emit = on_event or (lambda event: None)
         total = len(issues)
         result = DownloadResult(succeeded=0, total=total)
 
         with requests.Session() as session:
             for idx, issue in enumerate(issues, 1):
+                if should_stop is not None and should_stop():
+                    result.cancelled = True
+                    break
                 emit(DownloadEvent("started", issue, idx, total))
                 if self._download_issue(session, pack_title, issue, idx, total, emit, result):
                     result.succeeded += 1

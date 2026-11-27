@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}GetComics Marvel{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='htmx.min.js') }}"></script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="{{ url_for('index') }}">GetComics Marvel</a>
+    <a href="{{ url_for('queue_page') }}">Fila</a>
+    <div id="summary" hx-get="{{ url_for('queue_summary') }}" hx-trigger="load, every 2s"></div>
+    {% if session.get('auth') %}
+    <form method="post" action="{{ url_for('logout') }}"><button class="link">Sair</button></form>
+    {% endif %}
+  </header>
+  <main>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+    <p class="flash {{ category }}">{{ message }}</p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

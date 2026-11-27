@@ -1,0 +1,71 @@
+{% macro cancel_button(job, label) %}
+<form method="post" action="{{ url_for('queue_cancel', job_id=job.id) }}" class="inline">
+  <button class="secondary">{{ label }}</button>
+</form>
+{% endmacro %}
+
+{% macro link_item(title, link) %}
+{% set href = link.split(' ')[0] %}
+<li>{{ title }}: {% if href.startswith('http') %}<a href="{{ href }}" target="_blank" rel="noopener noreferrer">{{ link }}</a>{% else %}{{ link }}{% endif %}</li>
+{% endmacro %}
+
+{% if running %}
+<section class="card">
+  <h2>{{ running.pack_title }}</h2>
+  <p>
+    A descarregar <strong>{{ running.index }}/{{ running.total }}</strong>: {{ running.current_title }}
+    {% if running.percent is not none %}({{ running.percent }}%){% endif %}
+  </p>
+  {% if running.percent is not none %}
+  <progress max="100" value="{{ running.percent }}"></progress>
+  {% else %}
+  <progress></progress>
+  {% endif %}
+  <p class="dim">Concluídas: {{ running.succeeded }}</p>
+  {% if running.cancel_requested %}
+  <p class="warn">A parar depois da edição atual…</p>
+  {% else %}
+  {{ cancel_button(running, "Parar depois da edição atual") }}
+  {% endif %}
+  {% if running.log %}
+  <ul class="log">
+    {% for level, text in running.log[-12:] %}<li class="{{ level }}">{{ text }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if pending %}
+<h2>Em fila ({{ pending|length }})</h2>
+<ol class="queue">
+  {% for job in pending %}
+  <li>{{ job.pack_title }} <span class="dim">— {{ job.total }} edição(ões)</span> {{ cancel_button(job, "Remover") }}</li>
+  {% endfor %}
+</ol>
+{% endif %}
+
+{% if not running and not pending %}
+<p class="dim">Nada em curso nem em fila.</p>
+{% endif %}
+
+{% if finished %}
+<h2>Concluídos recentemente</h2>
+{% for job in finished %}
+<details class="card" id="job-{{ job.id }}" hx-preserve="true">
+  <summary>
+    {{ job.pack_title }} —
+    {% if job.state == 'done' %}<span class="ok">{{ job.succeeded }}/{{ job.total }} concluídas</span>
+    {% elif job.state == 'cancelled' %}<span class="warn">cancelado ({{ job.succeeded }}/{{ job.total }})</span>
+    {% else %}<span class="bad">falhou</span>{% endif %}
+  </summary>
+  {% if job.error %}<p class="bad">{{ job.error }}</p>{% endif %}
+  {% if job.manual_links %}
+  <p>Links que exigem abertura no browser:</p>
+  <ul>{% for title, link in job.manual_links %}{{ link_item(title, link) }}{% endfor %}</ul>
+  {% endif %}
+  {% if job.log %}
+  <ul class="log">{% for level, text in job.log %}<li class="{{ level }}">{{ text }}</li>{% endfor %}</ul>
+  {% endif %}
+</details>
+{% endfor %}
+{% endif %}

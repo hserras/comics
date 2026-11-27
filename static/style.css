@@ -1,0 +1,29 @@
+:root { color-scheme: dark; --bg: #14161a; --card: #1d2026; --line: #2d323b; --text: #e6e8eb; --dim: #8b929c; --accent: #6cb2ff; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { display: flex; gap: 1.25rem; align-items: center; padding: .75rem 1.25rem; background: var(--card); border-bottom: 1px solid var(--line); }
+header .brand { font-weight: 700; color: var(--text); }
+header form { margin-left: auto; }
+#summary { color: var(--dim); }
+main { max-width: 60rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; }
+h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: .4rem .6rem; text-align: left; border-bottom: 1px solid var(--line); }
+th { color: var(--dim); font-weight: 600; }
+.dim { color: var(--dim); } .ok { color: #5fd38d; } .bad { color: #ff7b7b; } .warn { color: #f0c05a; } .info { color: var(--accent); }
+.flash { padding: .6rem .9rem; border-radius: 6px; background: var(--card); border-left: 4px solid var(--dim); }
+.flash.ok { border-color: #5fd38d; } .flash.bad { border-color: #ff7b7b; } .flash.warn { border-color: #f0c05a; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; }
+button, input[type=number], input[type=password] { font: inherit; padding: .4rem .8rem; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+button { cursor: pointer; } button:hover { border-color: var(--accent); }
+button.secondary { color: var(--dim); }
+button.link { border: 0; background: none; color: var(--accent); padding: 0; }
+form.inline { display: inline-flex; gap: .4rem; }
+.pager { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: .8rem 1rem; margin: .75rem 0; }
+progress { width: 100%; height: .9rem; }
+.log { list-style: none; padding: 0; margin: .5rem 0 0; font-size: .9rem; }
+.queue li { margin: .4rem 0; }
+summary { cursor: pointer; }

@@ -1,0 +1,5 @@
+{% if running %}
+<a href="{{ url_for('queue_page') }}">⬇ {{ running.index }}/{{ running.total }}{% if running.percent is not none %} · {{ running.percent }}%{% endif %}{% if pending %} · +{{ pending|length }} em fila{% endif %}</a>
+{% elif pending %}
+<a href="{{ url_for('queue_page') }}">{{ pending|length }} em fila</a>
+{% endif %}
